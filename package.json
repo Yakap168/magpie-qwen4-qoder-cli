@@ -1,6 +1,6 @@
 {
   "name": "magpie-qwen4-qoder-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Qwen4-Max through the local Qwen Code CLI's Qoder sign-in, as a Magpie provider. Text-only CLI wrapper; uses Qwen Code's own limited-free quota.",
   "type": "module",
   "main": "./index.mjs",
@@ -33,6 +33,7 @@
     "url": "https://github.com/Yakap168/magpie-qwen4-qoder-cli/issues"
   },
   "magpie": {
-    "name": "Qwen4-Max via Qwen Code (Qoder)"
+    "name": "Qwen4-Max via Qwen Code (Qoder)",
+    "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjE3LjUgMjcuNyAxMzUuNiAxMzUuNiI+CiAgPHBhdGggZmlsbD0iIzA4MkRGRiIgZD0iTTEzMC4wNiw0My42NmgtMzMuMzdjMC0xLjQyLS4zNy0yLjg0LTEuMS00LjExbC00LjQ3LTcuNzRjLTEuNDctMi41NC00LjE4LTQuMTEtNy4xMi00LjExaC04LjkzYy0yLjk0LDAtNS42NSwxLjU3LTcuMTIsNC4xMWwtMTMuNjgsMjMuNjljLTEuNDcsMi41NC0xLjQ3LDUuNjcsMCw4LjIybDQuNDcsNy43NGMxLjQ3LDIuNTQsNC4xOCw0LjExLDcuMTIsNC4xMWg2NC4xOWMyLjk0LDAsNS42NS0xLjU3LDcuMTItNC4xMWw0LjQ3LTcuNzRjMS40Ny0yLjU0LDEuNDctNS42NywwLTguMjJsLTQuNDctNy43NGMtMS40Ny0yLjU0LTQuMTgtNC4xMS03LjEyLTQuMTFaIiAvPgogIDxwYXRoIGZpbGw9IiMwODJERkYiIGQ9Ik0xOS43NSw4My42NmwxNi42OCwyOC45Yy0xLjIzLjcxLTIuMjcsMS43NC0zLjAxLDMuMDFsLTQuNDcsNy43NGMtMS40NywyLjU0LTEuNDcsNS42NywwLDguMjJsNC40Nyw3Ljc0YzEuNDcsMi41NCw0LjE4LDQuMTEsNy4xMiw0LjExaDI3LjM1YzIuOTQsMCw1LjY1LTEuNTcsNy4xMi00LjExbDQuNDctNy43NGMxLjQ3LTIuNTQsMS40Ny01LjY3LDAtOC4yMmwtMzIuMS01NS41OWMtMS40Ny0yLjU0LTQuMTgtNC4xMS03LjEyLTQuMTFoLTguOTNjLTIuOTQsMC01LjY1LDEuNTctNy4xMiw0LjExbC00LjQ3LDcuNzRjLTEuNDcsMi41NC0xLjQ3LDUuNjcsMCw4LjIyWiIgLz4KICA8cGF0aCBmaWxsPSIjMDgyREZGIiBkPSJNMTA5LjU1LDE1OS4xOWwxNi42OC0yOC45YzEuMjMuNzEsMi42NCwxLjEsNC4xMSwxLjFoOC45M2MyLjk0LDAsNS42NS0xLjU3LDcuMTItNC4xMWw0LjQ3LTcuNzRjMS40Ny0yLjU0LDEuNDctNS42NywwLTguMjJsLTEzLjY4LTIzLjY5Yy0xLjQ3LTIuNTQtNC4xOC00LjExLTcuMTItNC4xMWgtOC45M2MtMi45NCwwLTUuNjUsMS41Ny03LjEyLDQuMTFsLTMyLjEsNTUuNTljLTEuNDcsMi41NC0xLjQ3LDUuNjcsMCw4LjIybDQuNDcsNy43NGMxLjQ3LDIuNTQsNC4xOCw0LjExLDcuMTIsNC4xMWg4LjkzYzIuOTQsMCw1LjY1LTEuNTcsNy4xMi00LjExWiIgLz4KPC9zdmc+Cg=="
   }
 }

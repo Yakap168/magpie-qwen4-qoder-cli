@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1 — 2026-11-16
+
+- 使用 Qwen 官方 Qwen Code logo 作为插件/Provider 图标（`auth.icon` 与 `magpie.icon`）。
+
 ## 0.1.0 — 2026-11-16
 
 - 首个版本：把本机 Qwen Code CLI 的 Qwen4-Max（`qmodel_latest`）作为 Magpie Provider 暴露。
