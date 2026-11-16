@@ -40,6 +40,20 @@
 
 ---
 
+## 思考强度
+
+插件把请求里的 `reasoning_effort`（也兼容 `reasoningEffort`、`reasoning.effort`、`thinking.effort`）传给 `qwen --reasoning-effort`：
+
+- `none` / `off`：关闭思考
+- `low` / `minimal`：低
+- `medium`：中
+- `high`：高（未指定时的默认值）
+- `xhigh` / `max`：最高
+
+Magpie 模型选择器里会列出 none / low / medium / high / xhigh。
+
+---
+
 ## 模型
 
 | 模型 | ID | 上下文 | 输出 | 说明 |

@@ -31,6 +31,7 @@ const ICON =
   "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjE3LjUgMjcuNyAxMzUuNiAxMzUuNiI+CiAgPHBhdGggZmlsbD0iIzA4MkRGRiIgZD0iTTEzMC4wNiw0My42NmgtMzMuMzdjMC0xLjQyLS4zNy0yLjg0LTEuMS00LjExbC00LjQ3LTcuNzRjLTEuNDctMi41NC00LjE4LTQuMTEtNy4xMi00LjExaC04LjkzYy0yLjk0LDAtNS42NSwxLjU3LTcuMTIsNC4xMWwtMTMuNjgsMjMuNjljLTEuNDcsMi41NC0xLjQ3LDUuNjcsMCw4LjIybDQuNDcsNy43NGMxLjQ3LDIuNTQsNC4xOCw0LjExLDcuMTIsNC4xMWg2NC4xOWMyLjk0LDAsNS42NS0xLjU3LDcuMTItNC4xMWw0LjQ3LTcuNzRjMS40Ny0yLjU0LDEuNDctNS42NywwLTguMjJsLTQuNDctNy43NGMtMS40Ny0yLjU0LTQuMTgtNC4xMS03LjEyLTQuMTFaIiAvPgogIDxwYXRoIGZpbGw9IiMwODJERkYiIGQ9Ik0xOS43NSw4My42NmwxNi42OCwyOC45Yy0xLjIzLjcxLTIuMjcsMS43NC0zLjAxLDMuMDFsLTQuNDcsNy43NGMtMS40NywyLjU0LTEuNDcsNS42NywwLDguMjJsNC40Nyw3Ljc0YzEuNDcsMi41NCw0LjE4LDQuMTEsNy4xMiw0LjExaDI3LjM1YzIuOTQsMCw1LjY1LTEuNTcsNy4xMi00LjExbDQuNDctNy43NGMxLjQ3LTIuNTQsMS40Ny01LjY3LDAtOC4yMmwtMzIuMS01NS41OWMtMS40Ny0yLjU0LTQuMTgtNC4xMS03LjEyLTQuMTFoLTguOTNjLTIuOTQsMC01LjY1LDEuNTctNy4xMiw0LjExbC00LjQ3LDcuNzRjLTEuNDcsMi41NC0xLjQ3LDUuNjcsMCw4LjIyWiIgLz4KICA8cGF0aCBmaWxsPSIjMDgyREZGIiBkPSJNMTA5LjU1LDE1OS4xOWwxNi42OC0yOC45YzEuMjMuNzEsMi42NCwxLjEsNC4xMSwxLjFoOC45M2MyLjk0LDAsNS42NS0xLjU3LDcuMTItNC4xMWw0LjQ3LTcuNzRjMS40Ny0yLjU0LDEuNDctNS42NywwLTguMjJsLTEzLjY4LTIzLjY5Yy0xLjQ3LTIuNTQtNC4xOC00LjExLTcuMTItNC4xMWgtOC45M2MtMi45NCwwLTUuNjUsMS41Ny03LjEyLDQuMTFsLTMyLjEsNTUuNTljLTEuNDcsMi41NC0xLjQ3LDUuNjcsMCw4LjIybDQuNDcsNy43NGMxLjQ3LDIuNTQsNC4xOCw0LjExLDcuMTIsNC4xMWg4LjkzYzIuOTQsMCw1LjY1LTEuNTcsNy4xMi00LjExWiIgLz4KPC9zdmc+Cg==";
 const CLI_TIMEOUT_MS = 180_000;
 const MAX_OUTPUT = 393_216;
+const DEFAULT_EFFORT = "high";
 
 const SYSTEM_PROMPT =
   "You are a helpful assistant. Answer the user's last message directly in plain text. " +
@@ -68,7 +69,9 @@ function modelEntry() {
     },
     release_date: "2026-11-16",
     variants: {
+      none: { reasoningEffort: "none" },
       low: { reasoningEffort: "low" },
+      medium: { reasoningEffort: "medium" },
       high: { reasoningEffort: "high" },
       xhigh: { reasoningEffort: "xhigh" },
     },
@@ -176,10 +179,41 @@ function promptOf(body) {
 }
 
 function mapEffort(value) {
-  const effort = String(value || "").toLowerCase();
-  if (effort === "low" || effort === "high" || effort === "xhigh") return effort;
-  if (effort === "medium") return "high";
+  const effort = String(value ?? "").trim().toLowerCase();
+  if (!effort) return null;
+  if (effort === "none" || effort === "off" || effort === "disabled") return "none";
+  if (effort === "minimal" || effort === "low") return "low";
+  if (effort === "medium" || effort === "mid") return "medium";
+  if (effort === "high") return "high";
+  if (effort === "xhigh" || effort === "extra-high" || effort === "max") return "xhigh";
   return null;
+}
+
+function effortOf(body) {
+  return mapEffort(
+    body?.reasoning_effort ??
+      body?.reasoningEffort ??
+      body?.reasoning?.effort ??
+      body?.thinking?.effort ??
+      null,
+  );
+}
+
+function logEffort(body, chosen) {
+  if (!process.env.MAGPIE_QWEN_DEBUG) return;
+  try {
+    fs.appendFileSync(
+      path.join(os.tmpdir(), "magpie-qwen4-qoder-effort.log"),
+      JSON.stringify({
+        at: new Date().toISOString(),
+        reasoning_effort: body?.reasoning_effort,
+        reasoningEffort: body?.reasoningEffort,
+        reasoning: body?.reasoning,
+        thinking: body?.thinking,
+        chosen,
+      }) + "\n",
+    );
+  } catch {}
 }
 
 function parseResult(stdout) {
@@ -297,8 +331,9 @@ async function runQwen(prompt, requestBody, signal) {
     }
   }
 
-  const effort = mapEffort(requestBody.reasoning_effort);
-  if (effort) args.push("--reasoning-effort", effort);
+  const effort = effortOf(requestBody) ?? DEFAULT_EFFORT;
+  logEffort(requestBody, effort);
+  args.push("--reasoning-effort", effort);
 
   const options = {
     cwd: trustedDir(),
