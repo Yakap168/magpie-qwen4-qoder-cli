@@ -1,0 +1,38 @@
+{
+  "name": "magpie-qwen4-qoder-cli",
+  "version": "0.1.0",
+  "description": "Qwen4-Max through the local Qwen Code CLI's Qoder sign-in, as a Magpie provider. Text-only CLI wrapper; uses Qwen Code's own limited-free quota.",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "magpie",
+    "opencode",
+    "opencode-plugin",
+    "qwen",
+    "qwen4",
+    "qoder",
+    "qwen-code",
+    "provider"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yakap168/magpie-qwen4-qoder-cli.git"
+  },
+  "homepage": "https://github.com/Yakap168/magpie-qwen4-qoder-cli#readme",
+  "bugs": {
+    "url": "https://github.com/Yakap168/magpie-qwen4-qoder-cli/issues"
+  },
+  "magpie": {
+    "name": "Qwen4-Max via Qwen Code (Qoder)"
+  }
+}
