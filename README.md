@@ -67,11 +67,20 @@ Magpie 社区里已经有一个名字相近的插件 [`opencode-qwen-cli-auth`](
 magpie plugin add github:Yakap168/magpie-qwen4-qoder-cli
 ```
 
+如果 `github:` 安装遇到 GitHub tarball 连接问题（国内网络常见），改用 `git clone`：
+
+```bash
+git clone https://github.com/Yakap168/magpie-qwen4-qoder-cli
+magpie plugin add ./magpie-qwen4-qoder-cli
+```
+
 本地开发：
 
 ```bash
 magpie plugin add ./magpie-qwen4-qoder-cli
 ```
+
+> 目前只发布在 GitHub，未发布到 npm。
 
 然后给 `Qwen4-Max via Qwen Code` 添加账号：
 
