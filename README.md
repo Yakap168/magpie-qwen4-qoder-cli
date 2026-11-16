@@ -12,21 +12,20 @@
 
 ---
 
-## 和 `opencode-qwen-cli-auth` 不是同一个东西
+## Qoder 和 Qwen Code CLI 的区别
 
-Magpie 社区里已经有一个名字相近的插件 [`opencode-qwen-cli-auth`](https://github.com/TVD-00/opencode-qwen-cli-auth)，
-但两者走的是完全不同的账号和模型：
+**Qoder** 是阿里的一套 AI 编程产品（桌面端、JetBrains 插件、Qoder CLI 等），有自己的账号体系和 **Qoder Credits**。在 Qoder 里用 `qoder-cn/qmodel_latest`，扣的是 Qoder CN 套餐的 Credits。
 
-| | `opencode-qwen-cli-auth` | **本插件** |
-|---|---|---|
-| 登录方式 | Qwen Account OAuth（qwen.ai） | 本机 **Qwen Code CLI** 的 Qoder 登录 |
-| 后端 | DashScope / Qwen OAuth | Qwen Code CLI 的 `qwen -p` |
-| 模型 | `coder-model`（Qwen 3.5 Plus）、`vision-model` | **Qwen4-Max**（`qmodel_latest`） |
-| 额度 | Qwen OAuth 免费层 | **Qwen Code 的 Qwen4 限免额度** |
-| 形态 | 直连 HTTP Provider | CLI 包装，文本 only |
+**Qwen Code CLI** 是另一个开源命令行工具（`QwenLM/qwen-code`）。它的 1.0 预览支持用 **Qoder 账号登录**，但领取的是 **Qwen Code 自己的 Qwen4 限时免费体验额度**，不是 Qoder 的 Credits。两者可以用同一个 Qoder 账号登录，但计费池不同。
 
-如果你要的是 Qwen Account 的免费 coder/vision 模型，装 `opencode-qwen-cli-auth`；
-如果你要的是 **Qwen4-Max + Qwen Code 额度**，用本插件。
+本插件调用的是本机 `qwen` 命令，所以走的是 **Qwen Code CLI 的额度路径**：请求由 Qwen Code 发出，不经过 Qoder 桌面端/Qoder CLI 的 Credits 计费。实测通过本插件请求后，Qoder CN 套餐 Credits 保持 2811/3300 不变。
+
+所以：
+
+- Magpie 里的 `qoder-cn/qmodel_latest` = Qoder 套餐额度。
+- 本插件的 `qwen4-qoder/qwen4-max` = Qwen Code CLI 的额度。
+
+不要把两者混为一谈。同一个 Qoder 账号可以同时登录 Qoder 和 Qwen Code CLI，但两边额度不互通。
 
 ---
 
