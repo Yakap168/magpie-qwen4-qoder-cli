@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.6 — 2026-11-17
+
+- 修复大工具列表导致的 `ENAMETOOLONG`：prompt 改为通过 stdin 传给 `qwen`，不再作为命令行参数；DSH 的 39 个工具请求已能正常返回 `write` tool_call。
+- 补充 README 的文件修改说明：插件返回 `tool_calls`，由 DSH 执行 `write`/`edit` 落盘。
+
 ## 0.1.5 — 2026-11-17
 
 - 新增 prompt-based 工具调用：支持 OpenAI `tools` / `tool_choice`，把 schema 注入 prompt，解析 `{"tool_calls":...}` 并返回标准 `tool_calls`；支持 assistant tool_calls 与 tool 结果回传。

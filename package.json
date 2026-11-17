@@ -1,6 +1,6 @@
 {
   "name": "magpie-qwen4-qoder-cli",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Qwen4-Max through the local Qwen Code CLI's Qoder sign-in, as a Magpie provider. Text, image and tool-call CLI wrapper; uses Qwen Code's own limited-free quota.",
   "type": "module",
   "main": "./index.mjs",

@@ -70,6 +70,20 @@ Magpie 模型选择器里会列出 none / low / medium / high / xhigh。
 
 ---
 
+## 文件修改
+
+Magpie 里的 Qwen Code 是 **Provider**，文件由外层 Agent 执行工具写入，不是模型自己在磁盘上写。DSH 提供 `write` / `edit` / `read` / `pwsh` 等工具；插件把工具 schema 注入 prompt，模型返回标准 `tool_calls`，由 DSH 执行。
+
+已用 DSH 的完整 39 个工具测试：请求“创建 `D:\ds.harness\_tmp\qwen-tool-test.txt`，写入 hello”，模型返回：
+
+```json
+{"name":"write","arguments":{"file_path":"D:\\ds.harness\\_tmp\\qwen-tool-test.txt","content":"hello"}}
+```
+
+DSH 执行 `write` 后文件就会落盘；下一轮把 tool 结果回传，模型继续回答。之前这里会报 `ENAMETOOLONG`，因为 40KB 的 prompt 被当成命令行参数传给 `qwen`；v0.1.6 改为通过 stdin 传入，已修复。
+
+---
+
 ## 图片输入
 
 支持 OpenAI 兼容的图片内容块（`image_url` / `input_image`），来源可以是 data URL 或 http(s) URL。插件会把图片写入临时文件，通过 `qwen --attachment <file>` 传给 Qwen Code CLI，请求结束后删除。最多 4 张，单张 20 MB；视频/音频暂不支持。
@@ -148,6 +162,7 @@ magpie accounts | grep qwen4
 
 - **慢**：每条请求启动一个 CLI 进程，短提示约 2–15 秒。
 - **工具调用是 prompt-based**：不是 Qoder 原生 tool_calls；依赖 Qwen4 按 JSON 格式返回，复杂 schema 或并行调用可能不如原生稳定。
+- **文件由外层 Agent 写**：插件只返回 `tool_calls`，DSH 执行 `write` / `edit`；插件本身不直接改文件。
 - **usage 是估算**：`prompt_tokens` 取自 `context_usage_ratio × 1M`（缺失时按 prompt 字符数/4），`completion_tokens` 按返回字符数/4。
 - **不是逐 token 流**：CLI 完成后一次性发正文；等待期间用心跳保活。
 - **默认 540 秒 CLI 超时**：低于 dsh 的 600 秒 stream idle timeout；`xhigh` 长任务通常约 2–3 分钟。可用 `MAGPIE_QWEN_CLI_TIMEOUT_MS` 调整，但不建议超过 600000，否则客户端可能先超时。
@@ -162,7 +177,8 @@ magpie accounts | grep qwen4
 Magpie / Agent
   → OpenAI Chat Completions 请求
   → 本插件把 messages 拼成一个 prompt；有 tools 时注入 schema
-  → qwen -p <prompt> -m qmodel_latest -o json --tools "" [--attachment <image>]
+  → qwen -p -m qmodel_latest -o json --tools "" [--attachment <image>]
+     （prompt 通过 stdin 传入，避免 Windows 命令行长度限制）
   → 解析 result；如果是 JSON tool_calls 就转成 OpenAI tool_calls
   → 返回 OpenAI Chat Completions（或 SSE 流 + 心跳）
 ```

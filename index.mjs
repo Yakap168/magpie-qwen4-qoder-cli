@@ -13,14 +13,11 @@
 // Provider id: qwen4-qoder. Model id: qwen4-max (maps to qmodel_latest).
 
 import { Buffer } from "node:buffer";
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
 
 const PROVIDER = "qwen4-qoder";
 const PROVIDER_NAME = "Qwen4-Max via Qwen Code";
@@ -667,7 +664,6 @@ async function runQwen(prompt, requestBody, signal, attachments = []) {
   if (signal?.aborted) throw new Error("Request aborted");
   const args = [
     "-p",
-    prompt,
     "-m",
     QWEN_MODEL,
     "-o",
@@ -695,17 +691,88 @@ async function runQwen(prompt, requestBody, signal, attachments = []) {
     args.push("--attachment", attachment);
   }
 
-  const options = {
-    cwd: trustedDir(),
-    timeout: CLI_TIMEOUT_MS,
-    maxBuffer: 32 * 1024 * 1024,
-    windowsHide: true,
-    encoding: "utf8",
-  };
-  if (signal) options.signal = signal;
+  return await new Promise((resolve, reject) => {
+    let settled = false;
+    let stdout = "";
+    let stderr = "";
+    let timer = null;
 
-  const { stdout } = await execFileAsync(qwenBin(), args, options);
-  return parseResultMeta(stdout);
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", onAbort);
+      fn(value);
+    };
+    const onAbort = () => {
+      try {
+        child.kill();
+      } catch {}
+      finish(reject, new Error("Request aborted"));
+    };
+
+    const child = spawn(qwenBin(), args, {
+      cwd: trustedDir(),
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+      } else {
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
+
+    timer = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {}
+      finish(reject, new Error(`Qwen Code CLI timed out after ${CLI_TIMEOUT_MS} ms`));
+    }, CLI_TIMEOUT_MS);
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      if (stdout.length > 32 * 1024 * 1024) {
+        try {
+          child.kill();
+        } catch {}
+        finish(reject, new Error("Qwen Code CLI output exceeded 32 MB"));
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      if (stderr.length > 4 * 1024 * 1024) stderr = stderr.slice(-4 * 1024 * 1024);
+    });
+    child.on("error", (error) => finish(reject, error));
+    child.on("close", (code, sig) => {
+      if (settled) return;
+      if (code !== 0) {
+        finish(
+          reject,
+          new Error(
+            stderr.trim() ||
+              `Qwen Code CLI exited with code ${code}${sig ? ` (${sig})` : ""}`,
+          ),
+        );
+        return;
+      }
+      try {
+        finish(resolve, parseResultMeta(stdout));
+      } catch (error) {
+        finish(reject, error);
+      }
+    });
+
+    // Windows caps a command line at ~32K; a prompt with 39 tool schemas is
+    // larger than that. Feed the prompt over stdin instead of argv.
+    child.stdin.on("error", () => {});
+    child.stdin.write(prompt);
+    child.stdin.end();
+  });
 }
 
 let active = 0;
