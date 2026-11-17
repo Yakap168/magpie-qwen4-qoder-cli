@@ -7,8 +7,8 @@
 **把本机 Qwen Code CLI 的 Qwen4-Max 接进 Magpie，消耗 Qwen Code 自己的限时免费额度。**
 
 这是一个 CLI 包装型 Magpie Provider 插件：每条请求调用一次本机 `qwen -p`，
-把官方 `-o json` 输出转成 OpenAI Chat Completions 响应。它不复制 OAuth token，
-也不调用 Qwen Code 的私有 HTTP 接口。
+把官方 `-o json` 输出转成 OpenAI Chat Completions 响应。支持文本和图片输入；
+它不复制 OAuth token，也不调用 Qwen Code 的私有 HTTP 接口。
 
 ---
 
@@ -34,7 +34,8 @@
 - **Qwen4-Max 接入 Magpie** —— 模型名 `qwen4-qoder/qwen4-max`。
 - **复用本机登录** —— 读取 `~/.qwen/qoder_oauth_creds.json` 的 Qwen Code 登录态，不复制 token。
 - **走 Qwen Code 额度** —— 请求由本机 `qwen -p` 发出，和你在终端里用 Qwen Code 是同一条路径。
-- **官方 CLI 接口** —— 只用 `-p` / `-o json` / `--tools ""` 等公开参数。
+- **官方 CLI 接口** —— 只用 `-p` / `-o json` / `--tools ""` / `--attachment` 等公开参数。
+- **图片输入** —— OpenAI `image_url` / `input_image` 内容块，支持 data URL 和 http(s) URL，最多 4 张、单张 20 MB。
 - **流式兼容** —— `stream: true` 返回一个 SSE 块，Magpie 和多数 OpenAI 客户端可接受。
 - **单进程串行** —— 插件内部排队，避免同时启动多个 Qwen Code 进程。
 
@@ -54,13 +55,19 @@ Magpie 模型选择器里会列出 none / low / medium / high / xhigh。
 
 ---
 
+## 图片输入
+
+支持 OpenAI 兼容的图片内容块（`image_url` / `input_image`），来源可以是 data URL 或 http(s) URL。插件会把图片写入临时文件，通过 `qwen --attachment <file>` 传给 Qwen Code CLI，请求结束后删除。最多 4 张，单张 20 MB；视频/音频暂不支持。
+
+---
+
 ## 模型
 
 | 模型 | ID | 上下文 | 输出 | 说明 |
 |---|---|---:|---:|---|
-| Qwen4-Max | `qwen4-qoder/qwen4-max` | 1,000,000 | 393,216 | 映射到 Qwen Code 的 `qmodel_latest` |
+| Qwen4-Max | `qwen4-qoder/qwen4-max` | 1,000,000 | 393,216 | 文本 + 图片；映射到 Qwen Code 的 `qmodel_latest` |
 
-文本 only；不转发图片、不暴露工具调用。
+支持文本和图片；不暴露工具调用。
 
 ---
 
@@ -125,7 +132,7 @@ magpie accounts | grep qwen4
 ## 限制
 
 - **慢**：每条请求启动一个 CLI 进程，短提示约 2–15 秒。
-- **文本 only**：不转发图片、不暴露工具调用；Claude Code / Codex 这类依赖工具循环的 Agent 可能不好用。
+- **图片支持，工具调用不支持**：图片通过 `--attachment` 转发；不暴露工具调用，Claude Code / Codex 这类依赖工具循环的 Agent 可能不好用。
 - **伪流式**：`stream: true` 只返回一个 SSE 块，不是逐 token 流。
 - **一次一条**：插件内部串行执行。
 - **额度在 Qwen Code 侧**：精确余额请在 Qwen Code 终端里 `/usage` 查看。
@@ -139,7 +146,7 @@ magpie accounts | grep qwen4
 Magpie / Agent
   → OpenAI Chat Completions 请求
   → 本插件把 messages 拼成一个 prompt
-  → qwen -p <prompt> -m qmodel_latest -o json --tools ""
+  → qwen -p <prompt> -m qmodel_latest -o json --tools "" [--attachment <image>]
   → 解析 result
   → 返回 OpenAI Chat Completions（或单个 SSE 块）
 ```

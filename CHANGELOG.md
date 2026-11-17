@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3 — 2026-11-17
+
+- 支持图片输入：解析 OpenAI `image_url` / `input_image`，支持 data URL 与 http(s) URL，最多 4 张、单张 20 MB。
+- 图片写入临时文件，通过 `qwen --attachment` 传给 Qwen Code CLI，请求结束自动清理。
+- 模型能力 `input.image` / `attachment` 改为 `true`。
+
 ## 0.1.2 — 2026-11-16
 
 - 修复思考强度：兼容 `reasoning_effort` / `reasoningEffort` / `reasoning.effort` / `thinking.effort`，支持 `none` / `low` / `medium` / `high` / `xhigh`，未指定时默认 `high`。

@@ -12,6 +12,7 @@
 //
 // Provider id: qwen4-qoder. Model id: qwen4-max (maps to qmodel_latest).
 
+import { Buffer } from "node:buffer";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -32,9 +33,13 @@ const ICON =
 const CLI_TIMEOUT_MS = 180_000;
 const MAX_OUTPUT = 393_216;
 const DEFAULT_EFFORT = "high";
+const MAX_IMAGES = 4;
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const IMAGE_FETCH_TIMEOUT_MS = 30_000;
 
 const SYSTEM_PROMPT =
   "You are a helpful assistant. Answer the user's last message directly in plain text. " +
+  "If images are attached, inspect them and answer about them. " +
   "Do not use tools, do not read or modify files, and do not ask clarifying questions " +
   "unless the request is impossible to answer.";
 
@@ -59,12 +64,19 @@ function modelEntry() {
     },
     options: {},
     headers: {},
+    // Magpie's provider-list shape: top-level attachment / modalities / reasoning.
+    attachment: true,
+    modalities: { input: ["text", "image"], output: ["text"] },
+    reasoning: true,
+    tool_call: false,
+    // OpenCode / AI SDK runtime shape.
     capabilities: {
       temperature: true,
       reasoning: true,
+      attachment: true,
       toolcall: false,
-      input: { text: true, image: false },
-      output: { text: true },
+      input: { text: true, image: true, audio: false, video: false, pdf: false },
+      output: { text: true, image: false, audio: false, video: false, pdf: false },
       interleaved: false,
     },
     release_date: "2026-11-16",
@@ -140,8 +152,8 @@ function contentText(content) {
       .map((part) => {
         if (typeof part === "string") return part;
         if (part && typeof part.text === "string") return part.text;
-        if (part?.type === "image_url" || part?.type === "input_image") {
-          return "[image omitted: this provider is text-only]";
+        if (part?.type === "image_url" || part?.type === "input_image" || part?.type === "image") {
+          return "[Image attached]";
         }
         return "";
       })
@@ -150,6 +162,85 @@ function contentText(content) {
   }
   if (content == null) return "";
   return JSON.stringify(content);
+}
+
+function imageUrlsOf(body) {
+  const urls = [];
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  for (const message of messages) {
+    const content = message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (!part || typeof part === "string") continue;
+      const type = part.type;
+      if (type === "image_url" || type === "input_image" || type === "image") {
+        let url = null;
+        if (typeof part.image_url === "string") url = part.image_url;
+        else if (part.image_url && typeof part.image_url.url === "string") url = part.image_url.url;
+        else if (typeof part.url === "string") url = part.url;
+        else if (typeof part.image === "string") url = part.image;
+        else if (part.source?.type === "base64" && typeof part.source.data === "string") {
+          url = `data:${part.source.media_type || "image/png"};base64,${part.source.data}`;
+        }
+        if (url) urls.push(url);
+      }
+    }
+  }
+  return urls;
+}
+
+function extensionFor(mime) {
+  const type = String(mime || "").toLowerCase();
+  if (type.includes("jpeg") || type.includes("jpg")) return ".jpg";
+  if (type.includes("webp")) return ".webp";
+  if (type.includes("gif")) return ".gif";
+  if (type.includes("bmp")) return ".bmp";
+  return ".png";
+}
+
+async function readImage(url) {
+  if (url.startsWith("data:")) {
+    const match = /^data:([^;,]+)?(;base64)?,([\s\S]*)$/.exec(url);
+    if (!match) throw new Error("Unsupported image data URL");
+    const mime = match[1] || "image/png";
+    const data = match[2]
+      ? Buffer.from(match[3], "base64")
+      : Buffer.from(decodeURIComponent(match[3]), "utf8");
+    return { mime, data };
+  }
+  if (/^https?:\/\//i.test(url)) {
+    const timeout =
+      typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+        ? AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS)
+        : undefined;
+    const response = await fetch(url, timeout ? { signal: timeout } : {});
+    if (!response.ok) throw new Error(`Image download failed: HTTP ${response.status}`);
+    const mime = response.headers.get("content-type") || "image/png";
+    return { mime, data: Buffer.from(await response.arrayBuffer()) };
+  }
+  throw new Error("Unsupported image URL");
+}
+
+async function materializeImages(body) {
+  const urls = imageUrlsOf(body);
+  if (urls.length === 0) return { dir: null, attachments: [] };
+  if (urls.length > MAX_IMAGES) throw new Error(`Too many images (max ${MAX_IMAGES})`);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "magpie-qwen4-"));
+  const attachments = [];
+  try {
+    for (let i = 0; i < urls.length; i += 1) {
+      const { mime, data } = await readImage(urls[i]);
+      if (data.length > MAX_IMAGE_BYTES) throw new Error(`Image ${i + 1} exceeds 20 MB`);
+      const file = path.join(dir, `image-${i + 1}${extensionFor(mime)}`);
+      fs.writeFileSync(file, data);
+      attachments.push(file);
+    }
+    return { dir, attachments };
+  } catch (error) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function promptOf(body) {
@@ -308,7 +399,7 @@ function modelsResponse() {
   );
 }
 
-async function runQwen(prompt, requestBody, signal) {
+async function runQwen(prompt, requestBody, signal, attachments = []) {
   const args = [
     "-p",
     prompt,
@@ -334,6 +425,10 @@ async function runQwen(prompt, requestBody, signal) {
   const effort = effortOf(requestBody) ?? DEFAULT_EFFORT;
   logEffort(requestBody, effort);
   args.push("--reasoning-effort", effort);
+
+  for (const attachment of attachments) {
+    args.push("--attachment", attachment);
+  }
 
   const options = {
     cwd: trustedDir(),
@@ -387,11 +482,26 @@ async function qwenFetch(input, init = {}) {
     requestBody = raw;
   }
 
+  let imageData;
   try {
-    const text = await enqueue(() => runQwen(promptOf(requestBody), requestBody, init.signal));
+    imageData = await materializeImages(requestBody);
+  } catch (error) {
+    return errorResponse(400, error?.message || String(error));
+  }
+
+  try {
+    const text = await enqueue(() =>
+      runQwen(promptOf(requestBody), requestBody, init.signal, imageData.attachments),
+    );
     return requestBody.stream ? streamResponse(text, requestBody.model) : jsonResponse(text, requestBody.model);
   } catch (error) {
     return errorResponse(502, error?.message || String(error));
+  } finally {
+    if (imageData.dir) {
+      try {
+        fs.rmSync(imageData.dir, { recursive: true, force: true });
+      } catch {}
+    }
   }
 }
 
@@ -468,6 +578,10 @@ export const _internal = {
   mapEffort,
   parseResult,
   qwenFetch,
+  imageUrlsOf,
+  readImage,
+  materializeImages,
+  MAX_IMAGES,
 };
 
 export default { id: PROVIDER, server: QwenCodeCliPlugin };
