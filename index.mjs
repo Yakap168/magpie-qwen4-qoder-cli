@@ -50,6 +50,13 @@ const SYSTEM_PROMPT =
   "Do not use tools, do not read or modify files, and do not ask clarifying questions " +
   "unless the request is impossible to answer.";
 
+const TOOL_SYSTEM_PROMPT =
+  "You are a helpful assistant. Answer the user's last message. " +
+  "The provided functions are real and available to you. If a function applies, call it by " +
+  "replying only with the specified JSON tool_calls object instead of saying you cannot access data. " +
+  "Do not use built-in tools, do not read or modify files, and do not ask clarifying questions " +
+  "unless the request is impossible to answer.";
+
 function modelEntry() {
   return {
     id: MODEL_ID,
@@ -75,13 +82,13 @@ function modelEntry() {
     attachment: true,
     modalities: { input: ["text", "image"], output: ["text"] },
     reasoning: true,
-    tool_call: false,
+    tool_call: true,
     // OpenCode / AI SDK runtime shape.
     capabilities: {
       temperature: true,
       reasoning: true,
       attachment: true,
-      toolcall: false,
+      toolcall: true,
       input: { text: true, image: true, audio: false, video: false, pdf: false },
       output: { text: true, image: false, audio: false, video: false, pdf: false },
       interleaved: false,
@@ -250,13 +257,140 @@ async function materializeImages(body) {
   }
 }
 
+function toolsOf(body) {
+  if (body?.tool_choice === "none") return [];
+  let tools = Array.isArray(body?.tools)
+    ? body.tools.filter((tool) => tool?.function?.name)
+    : [];
+  const choice = body?.tool_choice;
+  if (choice && typeof choice === "object" && choice.function?.name) {
+    tools = tools.filter((tool) => tool.function.name === choice.function.name);
+  }
+  return tools;
+}
+
+function toolPrompt(tools, toolChoice) {
+  const schema = tools.map((tool) => ({
+    name: tool.function.name,
+    description: tool.function.description || "",
+    parameters: tool.function.parameters || { type: "object", properties: {} },
+  }));
+  const required =
+    toolChoice === "required"
+      ? "You must call at least one function in this response.\n"
+      : "";
+  return (
+    "[Tools]\n" +
+    "You are in tool-calling mode. These functions are real and available to you. " +
+    "When the user's request can be handled by one of them, reply ONLY with a JSON object:\n" +
+    '{"tool_calls":[{"name":"<function name>","arguments":{...}}]}\n' +
+    "Do not answer in natural language if a function applies. Do not add Markdown fences or any other text.\n" +
+    required +
+    "Tools:\n" +
+    JSON.stringify(schema, null, 2)
+  );
+}
+
+function extractJsonObject(text) {
+  const marker = text.indexOf('"tool_calls"');
+  const start = marker >= 0 ? text.lastIndexOf("{", marker) : text.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+function parseToolCalls(text, tools) {
+  if (!tools.length) return null;
+  const raw = String(text || "")
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "");
+  let data = null;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    const object = extractJsonObject(raw);
+    if (object) {
+      try {
+        data = JSON.parse(object);
+      } catch {}
+    }
+  }
+  const list = Array.isArray(data?.tool_calls)
+    ? data.tool_calls
+    : Array.isArray(data?.toolCalls)
+      ? data.toolCalls
+      : null;
+  if (!list) return null;
+  const allowed = new Set(tools.map((tool) => tool.function.name));
+  const calls = [];
+  for (const call of list) {
+    const name = call?.name || call?.function?.name;
+    if (!name || !allowed.has(name)) continue;
+    const args = call.arguments ?? call.args ?? call.function?.arguments ?? {};
+    calls.push({
+      id: "call_" + randomUUID().replace(/-/g, "").slice(0, 24),
+      type: "function",
+      function: {
+        name,
+        arguments: typeof args === "string" ? args : JSON.stringify(args),
+      },
+    });
+  }
+  return calls.length ? calls : null;
+}
+
+function estimateUsage(text, contextUsageRatio, promptText) {
+  const ratio = Number(contextUsageRatio);
+  const prompt =
+    Number.isFinite(ratio) && ratio > 0
+      ? Math.round(ratio * 1_000_000)
+      : Math.max(0, Math.ceil(Array.from(String(promptText || "")).length / 4));
+  const completion = Math.max(0, Math.ceil(Array.from(String(text || "")).length / 4));
+  return {
+    prompt_tokens: prompt,
+    completion_tokens: completion,
+    total_tokens: prompt + completion,
+  };
+}
+
 function promptOf(body) {
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const lines = [];
   for (const message of messages) {
     const text = contentText(message?.content);
-    if (!text.trim()) continue;
     const role = message?.role || "user";
+    const calls =
+      role === "assistant" && Array.isArray(message?.tool_calls)
+        ? message.tool_calls
+            .map((call) => {
+              const name = call?.function?.name || call?.name;
+              const args = call?.function?.arguments ?? call?.arguments ?? "{}";
+              return name ? `${name}(${typeof args === "string" ? args : JSON.stringify(args)})` : "";
+            })
+            .filter(Boolean)
+        : [];
+    if (calls.length) {
+      lines.push(`[Assistant tool call]\n${calls.join("\n")}`);
+    }
+    if (!text.trim()) continue;
     const label =
       role === "system"
         ? "System"
@@ -265,13 +399,20 @@ function promptOf(body) {
           : role === "tool"
             ? "Tool result"
             : "User";
-    lines.push(`[${label}]\n${text}`);
+    if (role === "tool" && message?.tool_call_id) {
+      lines.push(`[Tool result for ${message.tool_call_id}]\n${text}`);
+    } else {
+      lines.push(`[${label}]\n${text}`);
+    }
   }
   if (lines.length === 0 && typeof body.prompt === "string") {
     lines.push(`[User]\n${body.prompt}`);
   }
+  const tools = toolsOf(body);
+  if (tools.length) lines.push(toolPrompt(tools, body.tool_choice));
   lines.push(
-    "[Instruction]\nReply to the last user message as the assistant. Output only the answer text.",
+    "[Instruction]\nReply to the last user message as the assistant. " +
+      "If you call a tool, output only the JSON tool_calls object; otherwise output only the answer text.",
   );
   return lines.join("\n\n");
 }
@@ -314,7 +455,7 @@ function logEffort(body, chosen) {
   } catch {}
 }
 
-function parseResult(stdout) {
+function parseResultMeta(stdout) {
   const text = String(stdout || "").trim();
   if (!text) throw new Error("Qwen Code returned no output");
   try {
@@ -322,14 +463,26 @@ function parseResult(stdout) {
     if (data?.is_error) {
       throw new Error(data?.error?.message || data?.result || "Qwen Code returned an error");
     }
-    if (typeof data?.result === "string") return data.result;
-    if (typeof data?.response === "string") return data.response;
-    if (data?.message?.content != null) return contentText(data.message.content);
-    return JSON.stringify(data);
+    const result =
+      typeof data?.result === "string"
+        ? data.result
+        : typeof data?.response === "string"
+          ? data.response
+          : data?.message?.content != null
+            ? contentText(data.message.content)
+            : JSON.stringify(data);
+    return {
+      text: result,
+      contextUsageRatio: Number(data?.context_usage_ratio) || 0,
+    };
   } catch (error) {
-    if (error instanceof SyntaxError) return text;
+    if (error instanceof SyntaxError) return { text, contextUsageRatio: 0 };
     throw error;
   }
+}
+
+function parseResult(stdout) {
+  return parseResultMeta(stdout).text;
 }
 
 function modelName(requested) {
@@ -337,7 +490,7 @@ function modelName(requested) {
   return name || `${PROVIDER}/${MODEL_ID}`;
 }
 
-function jsonResponse(text, requested) {
+function jsonResponse(text, requested, usage) {
   const body = {
     id: "chatcmpl-qwen-" + randomUUID(),
     object: "chat.completion",
@@ -350,7 +503,28 @@ function jsonResponse(text, requested) {
         finish_reason: "stop",
       },
     ],
-    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  };
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
+
+function toolCallsResponse(calls, requested, usage) {
+  const body = {
+    id: "chatcmpl-qwen-" + randomUUID(),
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: modelName(requested),
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: null, tool_calls: calls },
+        finish_reason: "tool_calls",
+      },
+    ],
+    usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
   };
   return new Response(JSON.stringify(body), {
     status: 200,
@@ -379,13 +553,14 @@ function streamQwen(requestBody, signal) {
           streamController.enqueue(encoder.encode(chunk));
         } catch {}
       };
-      const chunk = (delta, finish = null) =>
+      const chunk = (delta, finish = null, usage = null) =>
         `data: ${JSON.stringify({
           id,
           object: "chat.completion.chunk",
           created,
           model,
           choices: [{ index: 0, delta, finish_reason: finish }],
+          ...(usage ? { usage } : {}),
         })}\n\n`;
 
       // Send a data event before the CLI starts. A stream-idle timeout on the
@@ -400,11 +575,32 @@ function streamQwen(requestBody, signal) {
           const imageData = await materializeImages(requestBody);
           dir = imageData.dir;
           if (controller.signal.aborted) throw new Error("Request aborted");
-          const text = await withSlot(() =>
-            runQwen(promptOf(requestBody), requestBody, controller.signal, imageData.attachments),
+          const prompt = promptOf(requestBody);
+          const result = await withSlot(() =>
+            runQwen(prompt, requestBody, controller.signal, imageData.attachments),
           );
-          send(chunk({ content: text }));
-          send(chunk({}, "stop"));
+          const usage = estimateUsage(result.text, result.contextUsageRatio, prompt);
+          const tools = toolsOf(requestBody);
+          const calls = parseToolCalls(result.text, tools);
+          if (calls) {
+            send(
+              chunk({
+                tool_calls: calls.map((call, index) => ({
+                  index,
+                  id: call.id,
+                  type: "function",
+                  function: {
+                    name: call.function.name,
+                    arguments: call.function.arguments,
+                  },
+                })),
+              }),
+            );
+            send(chunk({}, "tool_calls", usage));
+          } else {
+            send(chunk({ content: result.text }));
+            send(chunk({}, "stop", usage));
+          }
           send("data: [DONE]\n\n");
         } catch (error) {
           const message = error?.message || String(error);
@@ -480,7 +676,7 @@ async function runQwen(prompt, requestBody, signal, attachments = []) {
     "--tools",
     "",
     "--system-prompt",
-    SYSTEM_PROMPT,
+    toolsOf(requestBody).length ? TOOL_SYSTEM_PROMPT : SYSTEM_PROMPT,
   ];
 
   const max = requestBody.max_tokens ?? requestBody.max_completion_tokens;
@@ -509,7 +705,7 @@ async function runQwen(prompt, requestBody, signal, attachments = []) {
   if (signal) options.signal = signal;
 
   const { stdout } = await execFileAsync(qwenBin(), args, options);
-  return parseResult(stdout);
+  return parseResultMeta(stdout);
 }
 
 let active = 0;
@@ -572,10 +768,16 @@ async function qwenFetch(input, init = {}) {
   }
 
   try {
-    const text = await withSlot(() =>
-      runQwen(promptOf(requestBody), requestBody, init.signal, imageData.attachments),
+    const prompt = promptOf(requestBody);
+    const result = await withSlot(() =>
+      runQwen(prompt, requestBody, init.signal, imageData.attachments),
     );
-    return jsonResponse(text, requestBody.model);
+    const usage = estimateUsage(result.text, result.contextUsageRatio, prompt);
+    const tools = toolsOf(requestBody);
+    const calls = parseToolCalls(result.text, tools);
+    return calls
+      ? toolCallsResponse(calls, requestBody.model, usage)
+      : jsonResponse(result.text, requestBody.model, usage);
   } catch (error) {
     return errorResponse(502, error?.message || String(error));
   } finally {
@@ -659,12 +861,16 @@ export const _internal = {
   promptOf,
   mapEffort,
   parseResult,
+  parseResultMeta,
   qwenFetch,
   imageUrlsOf,
   readImage,
   materializeImages,
   streamQwen,
   withSlot,
+  toolsOf,
+  parseToolCalls,
+  estimateUsage,
   MAX_IMAGES,
   KEEPALIVE_MS,
   MAX_CONCURRENCY,

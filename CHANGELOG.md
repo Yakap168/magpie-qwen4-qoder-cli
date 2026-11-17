@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.5 — 2026-11-17
+
+- 新增 prompt-based 工具调用：支持 OpenAI `tools` / `tool_choice`，把 schema 注入 prompt，解析 `{"tool_calls":...}` 并返回标准 `tool_calls`；支持 assistant tool_calls 与 tool 结果回传。
+- 模型能力 `tool_call` / `capabilities.toolcall` 改为 `true`。
+- `usage` 增加估算：prompt 来自 `context_usage_ratio × 1M`（缺失时按字符数/4），completion 按返回字符数/4。
+- 新增 `test-tools.mjs` 与 `test-tools-roundtrip.mjs`。
+
 ## 0.1.4 — 2026-11-17
 
 - 修复长任务 600 秒 stream idle timeout：`stream: true` 立即返回 SSE 心跳，之后每 15 秒保活；CLI 完成后再发正文。

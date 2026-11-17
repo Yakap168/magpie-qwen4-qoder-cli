@@ -7,7 +7,7 @@
 **把本机 Qwen Code CLI 的 Qwen4-Max 接进 Magpie，消耗 Qwen Code 自己的限时免费额度。**
 
 这是一个 CLI 包装型 Magpie Provider 插件：每条请求调用一次本机 `qwen -p`，
-把官方 `-o json` 输出转成 OpenAI Chat Completions 响应。支持文本和图片输入；
+把官方 `-o json` 输出转成 OpenAI Chat Completions 响应。支持文本、图片和工具调用；
 它不复制 OAuth token，也不调用 Qwen Code 的私有 HTTP 接口。
 
 ---
@@ -36,6 +36,7 @@
 - **走 Qwen Code 额度** —— 请求由本机 `qwen -p` 发出，和你在终端里用 Qwen Code 是同一条路径。
 - **官方 CLI 接口** —— 只用 `-p` / `-o json` / `--tools ""` / `--attachment` 等公开参数。
 - **图片输入** —— OpenAI `image_url` / `input_image` 内容块，支持 data URL 和 http(s) URL，最多 4 张、单张 20 MB。
+- **工具调用** —— 支持 OpenAI `tools` / `tool_choice`，把 schema 注入 prompt，解析模型返回的 JSON 成标准 `tool_calls`；支持 tool 结果回传。
 - **流式保活** —— `stream: true` 立即返回 SSE 心跳；经过 Magpie 网关时上游数据可能被缓冲，但单次 CLI 默认限制在 540 秒内，低于 dsh 的 600 秒 idle timeout。
 - **有界并发** —— 默认最多 2 条 CLI 请求并行，可用 `MAGPIE_QWEN_CONCURRENCY` 调整。
 
@@ -55,6 +56,20 @@ Magpie 模型选择器里会列出 none / low / medium / high / xhigh。
 
 ---
 
+## 工具调用
+
+请求里带 `tools` 时，插件会把工具 schema 注入 prompt，要求模型只返回：
+
+```json
+{"tool_calls":[{"name":"...","arguments":{...}}]}
+```
+
+插件解析后返回标准 OpenAI `tool_calls`；下一轮把 assistant `tool_calls` 和 `tool` 结果映射回 prompt。支持 `tool_choice` 的 none / auto / required，以及多个 `tool_calls`。
+
+这是 prompt-based，不是 Qoder 原生 tool_calls；复杂 schema 或并行工具可能不如原生稳定。已用 `get_weather` 做过两轮完整回环测试：第一轮返回 `tool_calls`，第二轮根据 tool 结果回答。
+
+---
+
 ## 图片输入
 
 支持 OpenAI 兼容的图片内容块（`image_url` / `input_image`），来源可以是 data URL 或 http(s) URL。插件会把图片写入临时文件，通过 `qwen --attachment <file>` 传给 Qwen Code CLI，请求结束后删除。最多 4 张，单张 20 MB；视频/音频暂不支持。
@@ -65,9 +80,9 @@ Magpie 模型选择器里会列出 none / low / medium / high / xhigh。
 
 | 模型 | ID | 上下文 | 输出 | 说明 |
 |---|---|---:|---:|---|
-| Qwen4-Max | `qwen4-qoder/qwen4-max` | 1,000,000 | 393,216 | 文本 + 图片；映射到 Qwen Code 的 `qmodel_latest` |
+| Qwen4-Max | `qwen4-qoder/qwen4-max` | 1,000,000 | 393,216 | 文本 + 图片 + 工具调用；映射到 Qwen Code 的 `qmodel_latest` |
 
-支持文本和图片；不暴露工具调用。
+支持文本、图片和工具调用。
 
 ---
 
@@ -132,7 +147,8 @@ magpie accounts | grep qwen4
 ## 限制
 
 - **慢**：每条请求启动一个 CLI 进程，短提示约 2–15 秒。
-- **图片支持，工具调用不支持**：图片通过 `--attachment` 转发；不暴露工具调用，Claude Code / Codex 这类依赖工具循环的 Agent 可能不好用。
+- **工具调用是 prompt-based**：不是 Qoder 原生 tool_calls；依赖 Qwen4 按 JSON 格式返回，复杂 schema 或并行调用可能不如原生稳定。
+- **usage 是估算**：`prompt_tokens` 取自 `context_usage_ratio × 1M`（缺失时按 prompt 字符数/4），`completion_tokens` 按返回字符数/4。
 - **不是逐 token 流**：CLI 完成后一次性发正文；等待期间用心跳保活。
 - **默认 540 秒 CLI 超时**：低于 dsh 的 600 秒 stream idle timeout；`xhigh` 长任务通常约 2–3 分钟。可用 `MAGPIE_QWEN_CLI_TIMEOUT_MS` 调整，但不建议超过 600000，否则客户端可能先超时。
 - **额度在 Qwen Code 侧**：精确余额请在 Qwen Code 终端里 `/usage` 查看。
@@ -145,10 +161,10 @@ magpie accounts | grep qwen4
 ```text
 Magpie / Agent
   → OpenAI Chat Completions 请求
-  → 本插件把 messages 拼成一个 prompt
+  → 本插件把 messages 拼成一个 prompt；有 tools 时注入 schema
   → qwen -p <prompt> -m qmodel_latest -o json --tools "" [--attachment <image>]
-  → 解析 result
-  → 返回 OpenAI Chat Completions（或单个 SSE 块）
+  → 解析 result；如果是 JSON tool_calls 就转成 OpenAI tool_calls
+  → 返回 OpenAI Chat Completions（或 SSE 流 + 心跳）
 ```
 
 支持环境变量：
