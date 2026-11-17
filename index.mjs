@@ -30,7 +30,14 @@ const QWEN_MODEL = "qmodel_latest";
 const DUMMY_BASE = "http://127.0.0.1:9/v1";
 const ICON =
   "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjE3LjUgMjcuNyAxMzUuNiAxMzUuNiI+CiAgPHBhdGggZmlsbD0iIzA4MkRGRiIgZD0iTTEzMC4wNiw0My42NmgtMzMuMzdjMC0xLjQyLS4zNy0yLjg0LTEuMS00LjExbC00LjQ3LTcuNzRjLTEuNDctMi41NC00LjE4LTQuMTEtNy4xMi00LjExaC04LjkzYy0yLjk0LDAtNS42NSwxLjU3LTcuMTIsNC4xMWwtMTMuNjgsMjMuNjljLTEuNDcsMi41NC0xLjQ3LDUuNjcsMCw4LjIybDQuNDcsNy43NGMxLjQ3LDIuNTQsNC4xOCw0LjExLDcuMTIsNC4xMWg2NC4xOWMyLjk0LDAsNS42NS0xLjU3LDcuMTItNC4xMWw0LjQ3LTcuNzRjMS40Ny0yLjU0LDEuNDctNS42NywwLTguMjJsLTQuNDctNy43NGMtMS40Ny0yLjU0LTQuMTgtNC4xMS03LjEyLTQuMTFaIiAvPgogIDxwYXRoIGZpbGw9IiMwODJERkYiIGQ9Ik0xOS43NSw4My42NmwxNi42OCwyOC45Yy0xLjIzLjcxLTIuMjcsMS43NC0zLjAxLDMuMDFsLTQuNDcsNy43NGMtMS40NywyLjU0LTEuNDcsNS42NywwLDguMjJsNC40Nyw3Ljc0YzEuNDcsMi41NCw0LjE4LDQuMTEsNy4xMiw0LjExaDI3LjM1YzIuOTQsMCw1LjY1LTEuNTcsNy4xMi00LjExbDQuNDctNy43NGMxLjQ3LTIuNTQsMS40Ny01LjY3LDAtOC4yMmwtMzIuMS01NS41OWMtMS40Ny0yLjU0LTQuMTgtNC4xMS03LjEyLTQuMTFoLTguOTNjLTIuOTQsMC01LjY1LDEuNTctNy4xMiw0LjExbC00LjQ3LDcuNzRjLTEuNDcsMi41NC0xLjQ3LDUuNjcsMCw4LjIyWiIgLz4KICA8cGF0aCBmaWxsPSIjMDgyREZGIiBkPSJNMTA5LjU1LDE1OS4xOWwxNi42OC0yOC45YzEuMjMuNzEsMi42NCwxLjEsNC4xMSwxLjFoOC45M2MyLjk0LDAsNS42NS0xLjU3LDcuMTItNC4xMWw0LjQ3LTcuNzRjMS40Ny0yLjU0LDEuNDctNS42NywwLTguMjJsLTEzLjY4LTIzLjY5Yy0xLjQ3LTIuNTQtNC4xOC00LjExLTcuMTItNC4xMWgtOC45M2MtMi45NCwwLTUuNjUsMS41Ny03LjEyLDQuMTFsLTMyLjEsNTUuNTljLTEuNDcsMi41NC0xLjQ3LDUuNjcsMCw4LjIybDQuNDcsNy43NGMxLjQ3LDIuNTQsNC4xOCw0LjExLDcuMTIsNC4xMWg4LjkzYzIuOTQsMCw1LjY1LTEuNTcsNy4xMi00LjExWiIgLz4KPC9zdmc+Cg==";
-const CLI_TIMEOUT_MS = 180_000;
+function envNumber(name, fallback, min = 1) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= min ? value : fallback;
+}
+
+const CLI_TIMEOUT_MS = envNumber("MAGPIE_QWEN_CLI_TIMEOUT_MS", 540_000);
+const KEEPALIVE_MS = envNumber("MAGPIE_QWEN_KEEPALIVE_MS", 15_000);
+const MAX_CONCURRENCY = Math.max(1, Math.trunc(envNumber("MAGPIE_QWEN_CONCURRENCY", 2)));
 const MAX_OUTPUT = 393_216;
 const DEFAULT_EFFORT = "high";
 const MAX_IMAGES = 4;
@@ -351,23 +358,84 @@ function jsonResponse(text, requested) {
   });
 }
 
-function streamResponse(text, requested) {
+function streamQwen(requestBody, signal) {
   const id = "chatcmpl-qwen-" + randomUUID();
   const created = Math.floor(Date.now() / 1000);
-  const model = modelName(requested);
-  const chunk = (delta, finish = null) =>
-    `data: ${JSON.stringify({
-      id,
-      object: "chat.completion.chunk",
-      created,
-      model,
-      choices: [{ index: 0, delta, finish_reason: finish }],
-    })}\n\n`;
-  const sse =
-    chunk({ role: "assistant", content: text }) +
-    chunk({}, "stop") +
-    "data: [DONE]\n\n";
-  return new Response(sse, {
+  const model = modelName(requestBody.model);
+  const encoder = new TextEncoder();
+  const controller = new AbortController();
+  let keepalive = null;
+
+  const onAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  const stream = new ReadableStream({
+    start(streamController) {
+      const send = (chunk) => {
+        try {
+          streamController.enqueue(encoder.encode(chunk));
+        } catch {}
+      };
+      const chunk = (delta, finish = null) =>
+        `data: ${JSON.stringify({
+          id,
+          object: "chat.completion.chunk",
+          created,
+          model,
+          choices: [{ index: 0, delta, finish_reason: finish }],
+        })}\n\n`;
+
+      // Send a data event before the CLI starts. A stream-idle timeout on the
+      // client side resets on any data, so a long xhigh call no longer looks
+      // like a dead connection.
+      send(chunk({ role: "assistant" }));
+      keepalive = setInterval(() => send(chunk({})), KEEPALIVE_MS);
+
+      (async () => {
+        let dir = null;
+        try {
+          const imageData = await materializeImages(requestBody);
+          dir = imageData.dir;
+          if (controller.signal.aborted) throw new Error("Request aborted");
+          const text = await withSlot(() =>
+            runQwen(promptOf(requestBody), requestBody, controller.signal, imageData.attachments),
+          );
+          send(chunk({ content: text }));
+          send(chunk({}, "stop"));
+          send("data: [DONE]\n\n");
+        } catch (error) {
+          const message = error?.message || String(error);
+          send(
+            `data: ${JSON.stringify({
+              error: { message, type: "qwen_code_cli_error" },
+            })}\n\n`,
+          );
+          send("data: [DONE]\n\n");
+        } finally {
+          if (keepalive) clearInterval(keepalive);
+          if (dir) {
+            try {
+              fs.rmSync(dir, { recursive: true, force: true });
+            } catch {}
+          }
+          if (signal) signal.removeEventListener("abort", onAbort);
+          try {
+            streamController.close();
+          } catch {}
+        }
+      })();
+    },
+    cancel() {
+      controller.abort();
+      if (keepalive) clearInterval(keepalive);
+      if (signal) signal.removeEventListener("abort", onAbort);
+    },
+  });
+
+  return new Response(stream, {
     status: 200,
     headers: {
       "content-type": "text/event-stream; charset=utf-8",
@@ -400,6 +468,7 @@ function modelsResponse() {
 }
 
 async function runQwen(prompt, requestBody, signal, attachments = []) {
+  if (signal?.aborted) throw new Error("Request aborted");
   const args = [
     "-p",
     prompt,
@@ -443,15 +512,26 @@ async function runQwen(prompt, requestBody, signal, attachments = []) {
   return parseResult(stdout);
 }
 
-let queue = Promise.resolve();
+let active = 0;
+const waiting = [];
 
-function enqueue(fn) {
-  const run = queue.then(fn, fn);
-  queue = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
+function withSlot(fn) {
+  return new Promise((resolve, reject) => {
+    const run = async () => {
+      active += 1;
+      try {
+        resolve(await fn());
+      } catch (error) {
+        reject(error);
+      } finally {
+        active -= 1;
+        const next = waiting.shift();
+        if (next) next();
+      }
+    };
+    if (active < MAX_CONCURRENCY) run();
+    else waiting.push(run);
+  });
 }
 
 async function qwenFetch(input, init = {}) {
@@ -482,6 +562,8 @@ async function qwenFetch(input, init = {}) {
     requestBody = raw;
   }
 
+  if (requestBody.stream) return streamQwen(requestBody, init.signal);
+
   let imageData;
   try {
     imageData = await materializeImages(requestBody);
@@ -490,10 +572,10 @@ async function qwenFetch(input, init = {}) {
   }
 
   try {
-    const text = await enqueue(() =>
+    const text = await withSlot(() =>
       runQwen(promptOf(requestBody), requestBody, init.signal, imageData.attachments),
     );
-    return requestBody.stream ? streamResponse(text, requestBody.model) : jsonResponse(text, requestBody.model);
+    return jsonResponse(text, requestBody.model);
   } catch (error) {
     return errorResponse(502, error?.message || String(error));
   } finally {
@@ -520,7 +602,7 @@ export async function QwenCodeCliPlugin() {
     auth: {
       provider: PROVIDER,
       icon: ICON,
-      maxConcurrency: 1,
+      maxConcurrency: MAX_CONCURRENCY,
       methods: [
         {
           type: "api",
@@ -581,7 +663,11 @@ export const _internal = {
   imageUrlsOf,
   readImage,
   materializeImages,
+  streamQwen,
+  withSlot,
   MAX_IMAGES,
+  KEEPALIVE_MS,
+  MAX_CONCURRENCY,
 };
 
 export default { id: PROVIDER, server: QwenCodeCliPlugin };

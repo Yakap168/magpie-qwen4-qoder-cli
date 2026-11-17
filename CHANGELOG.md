@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.4 — 2026-11-17
+
+- 修复长任务 600 秒 stream idle timeout：`stream: true` 立即返回 SSE 心跳，之后每 15 秒保活；CLI 完成后再发正文。
+- CLI 超时从 180 秒提高到 540 秒（低于 dsh 的 600 秒 idle timeout），可用 `MAGPIE_QWEN_CLI_TIMEOUT_MS` 调整。
+- 请求并发从串行改为默认 2 条，可用 `MAGPIE_QWEN_CONCURRENCY` 调整。
+- 客户端断开时中止 CLI 进程。
+
 ## 0.1.3 — 2026-11-17
 
 - 支持图片输入：解析 OpenAI `image_url` / `input_image`，支持 data URL 与 http(s) URL，最多 4 张、单张 20 MB。

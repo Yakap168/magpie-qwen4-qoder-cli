@@ -36,8 +36,8 @@
 - **走 Qwen Code 额度** —— 请求由本机 `qwen -p` 发出，和你在终端里用 Qwen Code 是同一条路径。
 - **官方 CLI 接口** —— 只用 `-p` / `-o json` / `--tools ""` / `--attachment` 等公开参数。
 - **图片输入** —— OpenAI `image_url` / `input_image` 内容块，支持 data URL 和 http(s) URL，最多 4 张、单张 20 MB。
-- **流式兼容** —— `stream: true` 返回一个 SSE 块，Magpie 和多数 OpenAI 客户端可接受。
-- **单进程串行** —— 插件内部排队，避免同时启动多个 Qwen Code 进程。
+- **流式保活** —— `stream: true` 立即返回 SSE 心跳；经过 Magpie 网关时上游数据可能被缓冲，但单次 CLI 默认限制在 540 秒内，低于 dsh 的 600 秒 idle timeout。
+- **有界并发** —— 默认最多 2 条 CLI 请求并行，可用 `MAGPIE_QWEN_CONCURRENCY` 调整。
 
 ---
 
@@ -133,8 +133,8 @@ magpie accounts | grep qwen4
 
 - **慢**：每条请求启动一个 CLI 进程，短提示约 2–15 秒。
 - **图片支持，工具调用不支持**：图片通过 `--attachment` 转发；不暴露工具调用，Claude Code / Codex 这类依赖工具循环的 Agent 可能不好用。
-- **伪流式**：`stream: true` 只返回一个 SSE 块，不是逐 token 流。
-- **一次一条**：插件内部串行执行。
+- **不是逐 token 流**：CLI 完成后一次性发正文；等待期间用心跳保活。
+- **默认 540 秒 CLI 超时**：低于 dsh 的 600 秒 stream idle timeout；`xhigh` 长任务通常约 2–3 分钟。可用 `MAGPIE_QWEN_CLI_TIMEOUT_MS` 调整，但不建议超过 600000，否则客户端可能先超时。
 - **额度在 Qwen Code 侧**：精确余额请在 Qwen Code 终端里 `/usage` 查看。
 - **非官方**：不是阿里/Qwen 官方插件；走的是公开的 `qwen -p` 接口。
 
@@ -154,6 +154,10 @@ Magpie / Agent
 支持环境变量：
 
 - `QWEN_CODE_BIN` —— 覆盖 `qwen` 可执行文件路径。
+- `MAGPIE_QWEN_CLI_TIMEOUT_MS` —— CLI 超时，默认 `540000`（9 分钟，低于 dsh 的 600 秒 idle timeout）。
+- `MAGPIE_QWEN_KEEPALIVE_MS` —— SSE 心跳间隔，默认 `15000`（15 秒）。
+- `MAGPIE_QWEN_CONCURRENCY` —— 同时运行的 CLI 数，默认 `2`。
+- `MAGPIE_QWEN_DEBUG` —— 设为 `1` 时记录思考档位字段到临时日志（不记录 prompt）。
 
 默认查找顺序：
 
